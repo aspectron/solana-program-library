@@ -4,9 +4,6 @@
     "author": "Solana Maintainers <maintainers@solana.foundation>",
     "repository": "https://github.com/solana-labs/solana-program-library",
     "license": "Apache-2.0",
-    "engines": {
-        "node": ">= 14"
-    },
     "publishConfig": {
         "access": "public"
     },
@@ -36,19 +33,20 @@
         "test:e2e-built": "start-server-and-test 'solana-test-validator --bpf-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA ../../target/deploy/spl_token.so --reset --quiet' http://localhost:8899/health 'mocha test/e2e'",
         "test:e2e-2022": "TEST_PROGRAM_ID=TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb start-server-and-test 'solana-test-validator --bpf-program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL ../../target/deploy/spl_associated_token_account.so --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb ../../target/deploy/spl_token_2022.so --reset --quiet' http://localhost:8899/health 'mocha test/e2e*'",
         "test:e2e-native": "start-server-and-test 'solana-test-validator --reset --quiet' http://localhost:8899/health 'mocha test/e2e'",
+        "test:build-programs": "cargo build-bpf --manifest-path ../program/Cargo.toml && cargo build-bpf --manifest-path ../program-2022/Cargo.toml && cargo build-bpf --manifest-path ../../associated-token-account/program/Cargo.toml",
         "docs": "shx rm -rf docs && NODE_OPTIONS=--max_old_space_size=4096 typedoc && shx cp .nojekyll docs/",
         "fmt": "prettier --write '{*,**/*}.{js,ts,jsx,tsx,json}'",
-        "lint": "eslint --ext .ts . && prettier --check '{*,**/*}.{js,ts,jsx,tsx,json}'",
+        "lint": "eslint --max-warnings 0 --ext .ts . && prettier --check '{*,**/*}.{js,ts,jsx,tsx,json}'",
         "lint:fix": "eslint --fix --ext .ts . && yarn fmt",
         "nuke": "shx rm -rf node_modules yarn.lock"
     },
     "dependencies": {
         "@solana/buffer-layout": "^4.0.0",
         "@solana/buffer-layout-utils": "^0.2.0",
-        "@solana/web3.js": "^1.36.0",
-        "start-server-and-test": "^1.14.0"
+        "@solana/web3.js": "^1.41.0"
     },
     "devDependencies": {
+        "@solana/spl-memo": "^0.1.0",
         "@types/chai-as-promised": "^7.1.4",
         "@types/eslint": "^8.4.0",
         "@types/eslint-plugin-prettier": "^3.1.0",
@@ -66,6 +64,7 @@
         "mocha": "^9.1.4",
         "prettier": "^2.5.1",
         "shx": "^0.3.4",
+        "start-server-and-test": "^1.14.0",
         "ts-node": "^10.4.0",
         "tslib": "^2.3.1",
         "typedoc": "^0.22.11",

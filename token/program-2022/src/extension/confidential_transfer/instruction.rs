@@ -1,5 +1,5 @@
-#[cfg(not(target_arch = "bpf"))]
-use solana_zk_token_sdk::encryption::{auth_encryption::AeCiphertext, elgamal::ElGamalPubkey};
+#[cfg(not(target_os = "solana"))]
+use solana_zk_token_sdk::encryption::auth_encryption::AeCiphertext;
 pub use solana_zk_token_sdk::zk_token_proof_instruction::*;
 use {
     crate::{
@@ -201,6 +201,28 @@ pub enum ConfidentialTransferInstruction {
     ///
     Transfer,
 
+    /// Transfer tokens confidentially with fee.
+    ///
+    ///   * Single owner/delegate
+    ///   1. `[writable]` The source SPL Token account.
+    ///   2. `[writable]` The destination SPL Token account.
+    ///   3. `[]` The token mint.
+    ///   4. `[]` Instructions sysvar.
+    ///   5. `[signer]` The single source account owner.
+    ///
+    ///   * Multisignature owner/delegate
+    ///   1. `[writable]` The source SPL Token account.
+    ///   2. `[writable]` The destination SPL Token account.
+    ///   3. `[]` The token mint.
+    ///   4. `[]` Instructions sysvar.
+    ///   5. `[]` The multisig  source account owner.
+    ///   6.. `[signer]` Required M signer accounts for the SPL Token Multisig account.
+    ///
+    /// Data expected by this instruction:
+    ///   `TransferWithFeeInstructionData`
+    ///
+    TransferWithFee,
+
     /// Applies the pending balance to the available balance, based on the history of `Deposit`
     /// and/or `Transfer` instructions.
     ///
@@ -357,6 +379,9 @@ pub struct ConfigureAccountInstructionData {
     pub encryption_pubkey: EncryptionPubkey,
     /// The decryptable balance (always 0) once the configure account succeeds
     pub decryptable_zero_balance: DecryptableBalance,
+    /// The maximum number of despots and transfers that an account can receiver before the
+    /// `ApplyPendingBalance` is executed
+    pub maximum_pending_balance_credit_counter: PodU64,
 }
 
 /// Data expected by `ConfidentialTransferInstruction::EmptyAccount`
@@ -397,6 +422,17 @@ pub struct WithdrawInstructionData {
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct TransferInstructionData {
+    /// The new source decryptable balance if the transfer succeeds
+    pub new_source_decryptable_available_balance: DecryptableBalance,
+    /// Relative location of the `ProofInstruction::VerifyTransfer` instruction to the
+    /// `Transfer` instruction in the transaction
+    pub proof_instruction_offset: i8,
+}
+
+/// Data expected by `ConfidentialTransferInstruction::TransferWithFee`
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct TransferWithFeeInstructionData {
     /// The new source decryptable balance if the transfer succeeds
     pub new_source_decryptable_available_balance: DecryptableBalance,
     /// Relative location of the `ProofInstruction::VerifyTransfer` instruction to the
@@ -478,13 +514,15 @@ pub fn update_mint(
 }
 
 /// Create a `ConfigureAccount` instruction
-#[cfg(not(target_arch = "bpf"))]
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(target_os = "solana"))]
 pub fn configure_account(
     token_program_id: &Pubkey,
     token_account: &Pubkey,
     mint: &Pubkey,
-    encryption_pubkey: ElGamalPubkey,
+    encryption_pubkey: EncryptionPubkey,
     decryptable_zero_balance: AeCiphertext,
+    maximum_pending_balance_credit_counter: u64,
     authority: &Pubkey,
     multisig_signers: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
@@ -505,8 +543,9 @@ pub fn configure_account(
         TokenInstruction::ConfidentialTransferExtension,
         ConfidentialTransferInstruction::ConfigureAccount,
         &ConfigureAccountInstructionData {
-            encryption_pubkey: encryption_pubkey.into(),
+            encryption_pubkey,
             decryptable_zero_balance: decryptable_zero_balance.into(),
+            maximum_pending_balance_credit_counter: maximum_pending_balance_credit_counter.into(),
         },
     ))
 }
@@ -666,7 +705,7 @@ pub fn inner_withdraw(
 
 /// Create a `Withdraw` instruction
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 pub fn withdraw(
     token_program_id: &Pubkey,
     source_token_account: &Pubkey,
@@ -737,7 +776,7 @@ pub fn inner_transfer(
 
 /// Create a `Transfer` instruction
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 pub fn transfer(
     token_program_id: &Pubkey,
     source_token_account: &Pubkey,
@@ -751,6 +790,73 @@ pub fn transfer(
     Ok(vec![
         verify_transfer(proof_data),
         inner_transfer(
+            token_program_id,
+            source_token_account,
+            destination_token_account,
+            mint,
+            new_source_decryptable_available_balance.into(),
+            authority,
+            multisig_signers,
+            -1,
+        )?, // calls check_program_account
+    ])
+}
+
+/// Create a inner `TransferWithFee` instruction
+///
+/// This instruction is suitable for use with a cross-program `invoke`
+#[allow(clippy::too_many_arguments)]
+pub fn inner_transfer_with_fee(
+    token_program_id: &Pubkey,
+    source_token_account: &Pubkey,
+    destination_token_account: &Pubkey,
+    mint: &Pubkey,
+    new_source_decryptable_available_balance: DecryptableBalance,
+    authority: &Pubkey,
+    multisig_signers: &[&Pubkey],
+    proof_instruction_offset: i8,
+) -> Result<Instruction, ProgramError> {
+    check_program_account(token_program_id)?;
+    let mut accounts = vec![
+        AccountMeta::new(*source_token_account, false),
+        AccountMeta::new(*destination_token_account, false),
+        AccountMeta::new_readonly(*mint, false),
+        AccountMeta::new_readonly(sysvar::instructions::id(), false),
+        AccountMeta::new_readonly(*authority, multisig_signers.is_empty()),
+    ];
+
+    for multisig_signer in multisig_signers.iter() {
+        accounts.push(AccountMeta::new_readonly(**multisig_signer, true));
+    }
+
+    Ok(encode_instruction(
+        token_program_id,
+        accounts,
+        TokenInstruction::ConfidentialTransferExtension,
+        ConfidentialTransferInstruction::TransferWithFee,
+        &TransferWithFeeInstructionData {
+            new_source_decryptable_available_balance,
+            proof_instruction_offset,
+        },
+    ))
+}
+
+/// Create a `Transfer` instruction
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(target_os = "solana"))]
+pub fn transfer_with_fee(
+    token_program_id: &Pubkey,
+    source_token_account: &Pubkey,
+    destination_token_account: &Pubkey,
+    mint: &Pubkey,
+    new_source_decryptable_available_balance: AeCiphertext,
+    authority: &Pubkey,
+    multisig_signers: &[&Pubkey],
+    proof_data: &TransferWithFeeData,
+) -> Result<Vec<Instruction>, ProgramError> {
+    Ok(vec![
+        verify_transfer_with_fee(proof_data),
+        inner_transfer_with_fee(
             token_program_id,
             source_token_account,
             destination_token_account,
@@ -797,7 +903,7 @@ pub fn inner_apply_pending_balance(
 }
 
 /// Create a `ApplyPendingBalance` instruction
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 pub fn apply_pending_balance(
     token_program_id: &Pubkey,
     token_account: &Pubkey,

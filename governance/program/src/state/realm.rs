@@ -22,12 +22,12 @@ use crate::{
         enums::{GovernanceAccountType, MintMaxVoteWeightSource},
         legacy::RealmV1,
         token_owner_record::get_token_owner_record_data_for_realm,
+        vote_record::VoteKind,
     },
     PROGRAM_AUTHORITY_SEED,
 };
 
 /// Realm Config instruction args
-#[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct RealmConfigArgs {
     /// Indicates whether council_mint should be used
@@ -66,7 +66,6 @@ pub enum SetRealmAuthorityAction {
 }
 
 /// Realm Config defining Realm parameters.
-#[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct RealmConfig {
     /// Indicates whether an external addin program should be used to provide voters weights for the community mint
@@ -90,7 +89,6 @@ pub struct RealmConfig {
 
 /// Governance Realm Account
 /// Account PDA seeds" ['governance', name]
-#[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct RealmV2 {
     /// Governance account type
@@ -177,6 +175,37 @@ impl RealmV2 {
         Err(GovernanceError::InvalidGoverningTokenMint.into())
     }
 
+    /// Returns the governing token mint which is used to vote on a proposal given the provided Vote kind and vote_governing_token_mint
+    ///
+    /// Veto vote is cast on a proposal configured for the opposite voting population defined using governing_token_mint
+    /// Council can veto Community vote and Community can veto Council assuming the veto for the voting population is enabled
+    ///
+    /// For all votes other than Veto (Electorate votes) the vote_governing_token_mint is the same as Proposal governing_token_mint
+    pub fn get_proposal_governing_token_mint_for_vote(
+        &self,
+        vote_governing_token_mint: &Pubkey,
+        vote_kind: &VoteKind,
+    ) -> Result<Pubkey, ProgramError> {
+        match vote_kind {
+            VoteKind::Electorate => Ok(*vote_governing_token_mint),
+            VoteKind::Veto => {
+                // When Community veto Council proposal then return council_token_mint as the Proposal governing_token_mint
+                if self.community_mint == *vote_governing_token_mint {
+                    // Community Veto is not supported in the current version
+                    return Err(GovernanceError::GoverningTokenMintNotAllowedToVote.into());
+                    //return Ok(self.config.council_mint.unwrap());
+                }
+
+                // When Council veto Community proposal then return community_token_mint as the Proposal governing_token_mint
+                if self.config.council_mint == Some(*vote_governing_token_mint) {
+                    return Ok(self.community_mint);
+                }
+
+                Err(GovernanceError::InvalidGoverningTokenMint.into())
+            }
+        }
+    }
+
     /// Asserts the given governing token mint and holding accounts are valid for the realm
     pub fn assert_is_valid_governing_token_mint_and_holding(
         &self,
@@ -192,21 +221,6 @@ impl RealmV2 {
 
         if governing_token_holding_address != *governing_token_holding {
             return Err(GovernanceError::InvalidGoverningTokenHoldingAccount.into());
-        }
-
-        Ok(())
-    }
-
-    /// Asserts the given governing token can be deposited into the realm
-    pub fn asset_governing_tokens_deposits_allowed(
-        &self,
-        governing_token_mint: &Pubkey,
-    ) -> Result<(), ProgramError> {
-        // If the deposit is for the community token and the realm uses community voter weight addin then panic
-        if self.config.use_community_voter_weight_addin
-            && self.community_mint == *governing_token_mint
-        {
-            return Err(GovernanceError::GoverningTokenDepositsNotAllowed.into());
         }
 
         Ok(())

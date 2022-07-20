@@ -21,8 +21,10 @@ export * from './syncNative'; //          17
 export * from './initializeAccount3'; //  18
 export * from './initializeMultisig2'; // 19
 export * from './initializeMint2'; //     20
+export * from './initializeImmutableOwner'; //  22
 export * from './initializeMintCloseAuthority'; // 23
 export * from './createNativeMint'; //    29
+export * from './initializeNonTransferableMint'; //    32
 
 export * from './decode';
 
